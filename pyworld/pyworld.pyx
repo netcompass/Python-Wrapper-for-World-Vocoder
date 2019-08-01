@@ -13,6 +13,28 @@ cdef extern from "world/synthesis.h":
         int fft_size, double frame_period,
         int fs, int y_length, double *y) except +
 
+    cdef cppclass _SynthesisIncremental "SynthesisIncremental":
+        double frame_period
+        int fs
+        _SynthesisIncremental() except +
+
+    _SynthesisIncremental *SynthesisIncrementalInitialize(
+        int fft_size, double frame_period, int fs) except +
+
+    int SynthesisIncrementalUpdate(_SynthesisIncremental *si, const double *f0, int f0_length,
+        const double * const *spectrogram, const double * const *aperiodicity,
+        int y_length, double *y) except +
+
+    int SynthesisIncrementalFinalize(_SynthesisIncremental *si, int y_length, double *y) except +
+
+cdef class SynthesisIncremental:
+    cdef _SynthesisIncremental *thisptr
+
+    def __cinit__(self):
+        self.thisptr = NULL
+
+    def __dealloc__(self):
+        del self.thisptr
 
 cdef extern from "world/cheaptrick.h":
     ctypedef struct CheapTrickOption:
@@ -452,6 +474,116 @@ def synthesize(np.ndarray[double, ndim=1, mode="c"] f0 not None,
         cpp_aperiodicity, fft_size, frame_period, fs, y_length, &y[0])
     return y
 
+def synthesize_incl_initialize(
+               int fft_size,
+               int fs,
+               double frame_period=default_frame_period):
+    """Incremental WORLD synthesis from parametric representation.
+
+    Parameters
+    ----------
+    fft_size : int
+        FFT Window size.
+    fs : int
+        Sample rate of input signal in Hz.
+    frame_period : float
+        Period between consecutive frames in milliseconds.
+        Default: 5.0
+
+    Returns
+    -------
+    s : object
+        Working set.
+    """
+
+    cdef _SynthesisIncremental *_si = SynthesisIncrementalInitialize(fft_size, frame_period, fs)
+
+    si = SynthesisIncremental()
+    si.thisptr = _si
+
+    return si
+
+def synthesize_incl_update(SynthesisIncremental si,
+               np.ndarray[double, ndim=1, mode="c"] f0 not None,
+               np.ndarray[double, ndim=2, mode="c"] spectrogram not None,
+               np.ndarray[double, ndim=2, mode="c"] aperiodicity not None):
+    """Incremental WORLD synthesis from parametric representation.
+
+    Parameters
+    ----------
+    s : object
+        Synthesis object.
+    f0 : ndarray
+        Input F0 contour.
+    spectrogram : ndarray
+        Spectral envelope.
+    aperiodicity : ndarray
+        Aperodicity envelope.
+
+    Returns
+    -------
+    y : ndarray
+        Output waveform signal available.
+    """
+    if (f0.shape[0] != spectrogram.shape[0] or
+        f0.shape[0] != aperiodicity.shape[0]):
+        raise ValueError('Mismatched number of frames between F0 ({:d}), '
+                         'spectrogram ({:d}) and aperiodicty ({:d})'
+                         .format(f0.shape[0], spectrogram.shape[0],
+                                 aperiodicity.shape[0]))
+    if spectrogram.shape[1] != aperiodicity.shape[1]:
+        raise ValueError('Mismatched dimensionality (spec size) between '
+                         'spectrogram ({:d}) and aperiodicity ({:d})'
+                         .format(spectrogram.shape[1], aperiodicity.shape[1]))
+
+    cdef int f0_length = <int>len(f0)
+    y_length = int(f0_length * si.thisptr.frame_period * si.thisptr.fs)
+    print(f'y_length: {y_length}, f0_length: {f0_length}, frame_period: {si.thisptr.frame_period}, fs: {si.thisptr.fs}')
+    cdef int fft_size = (<int>spectrogram.shape[1] - 1)*2
+    cdef np.ndarray[double, ndim=1, mode="c"] y = \
+        np.zeros(y_length, dtype=np.dtype('float64'))
+
+    cdef double[:, ::1] spectrogram0 = spectrogram
+    cdef double[:, ::1] aperiodicity0 = aperiodicity
+    cdef np.intp_t[:] tmp = np.zeros(f0_length, dtype=np.intp)
+    cdef np.intp_t[:] tmp2 = np.zeros(f0_length, dtype=np.intp)
+    cdef double **cpp_spectrogram = <double**> (<void*> &tmp[0])
+    cdef double **cpp_aperiodicity = <double**> (<void*> &tmp2[0])
+    cdef np.intp_t i
+    for i in range(f0_length):
+        cpp_spectrogram[i] = &spectrogram0[i, 0]
+        cpp_aperiodicity[i] = &aperiodicity0[i, 0]
+
+    cdef int length = SynthesisIncrementalUpdate(si.thisptr, &f0[0], f0_length, cpp_spectrogram, cpp_aperiodicity, y_length, &y[0])
+    print(f'length: {length}')
+    return y[:length]
+
+def synthesize_incl_finalize(SynthesisIncremental si):
+    """Incremental WORLD synthesis from parametric representation.
+
+    Parameters
+    ----------
+    s : object
+        Synthesis object.
+    spectrogram : ndarray
+        Spectral envelope.
+    aperiodicity : ndarray
+        Aperodicity envelope.
+
+    Returns
+    -------
+    y : ndarray
+        Output waveform signal availble.
+    """
+    cdef int f0_length = 65536
+    y_length = int(f0_length * si.thisptr.frame_period * si.thisptr.fs / 1000)
+    cdef np.ndarray[double, ndim=1, mode="c"] y = \
+        np.zeros(y_length, dtype=np.dtype('float64'))
+
+    cdef int length = SynthesisIncrementalFinalize(si.thisptr, y_length, &y[0])
+    print(f'length: {length}')
+
+    return y[:length]
 
 def get_num_aperiodicities(fs):
     """Calculate the required dimensionality to code D4C aperiodicity.
