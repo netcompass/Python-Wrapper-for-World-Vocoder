@@ -538,7 +538,7 @@ def synthesize_incl_update(SynthesisIncremental si,
 
     cdef int f0_length = <int>len(f0)
     y_length = int(f0_length * si.thisptr.frame_period * si.thisptr.fs)
-    print(f'y_length: {y_length}, f0_length: {f0_length}, frame_period: {si.thisptr.frame_period}, fs: {si.thisptr.fs}')
+
     cdef int fft_size = (<int>spectrogram.shape[1] - 1)*2
     cdef np.ndarray[double, ndim=1, mode="c"] y = \
         np.zeros(y_length, dtype=np.dtype('float64'))
@@ -555,7 +555,7 @@ def synthesize_incl_update(SynthesisIncremental si,
         cpp_aperiodicity[i] = &aperiodicity0[i, 0]
 
     cdef int length = SynthesisIncrementalUpdate(si.thisptr, &f0[0], f0_length, cpp_spectrogram, cpp_aperiodicity, y_length, &y[0])
-    print(f'length: {length}')
+
     return y[:length]
 
 def synthesize_incl_finalize(SynthesisIncremental si):
@@ -581,7 +581,6 @@ def synthesize_incl_finalize(SynthesisIncremental si):
         np.zeros(y_length, dtype=np.dtype('float64'))
 
     cdef int length = SynthesisIncrementalFinalize(si.thisptr, y_length, &y[0])
-    print(f'length: {length}')
 
     return y[:length]
 
